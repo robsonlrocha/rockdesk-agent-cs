@@ -2,13 +2,15 @@ using System.Management;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text;
 using RockDeskAgent.Config;
 
 namespace RockDeskAgent.Core;
 
 /// <summary>
-/// Coleta hardware/software via WMI e envia para o portal.
-/// Campos idênticos ao agente Python para compatibilidade total.
+/// Coleta hardware/software via WMI.
+/// Formato de campos idêntico ao agente Python para compatibilidade total com o portal.
+/// Campos compostos usam delimitadores :: (campos) e ||| (registros).
 /// </summary>
 public static class HardwareInventory
 {
@@ -28,11 +30,16 @@ public static class HardwareInventory
         Safe("CPU",         () => CollectCpu(d));
         Safe("OS",          () => CollectOs(d));
         Safe("RAM",         () => CollectRam(d));
+        Safe("discos",      () => CollectDisks(d));
         Safe("rede",        () => CollectNetwork(d));
         Safe("IP público",  () => CollectPublicIp(d));
-        Safe("discos",      () => CollectDisks(d));
+        Safe("software",    () => CollectSoftware(d));
 
-        Logger.LogInformation("Hardware coletado ({N} campos).", d.Count);
+        Logger.LogInformation("Hardware coletado: {N} campos, {M} módulos RAM, {Dk} discos, {Sw} software.",
+            d.Count,
+            d.GetValueOrDefault("memory_modules", "").Split(new[]{"|||"}, StringSplitOptions.RemoveEmptyEntries).Length,
+            d.GetValueOrDefault("disks", "").Split(new[]{"|||"}, StringSplitOptions.RemoveEmptyEntries).Length,
+            d.GetValueOrDefault("software", "").Split(new[]{"|||"}, StringSplitOptions.RemoveEmptyEntries).Length);
         return d;
     }
 
@@ -44,7 +51,7 @@ public static class HardwareInventory
         d["comp_model"]          = Wmi("Win32_ComputerSystem", "Model");
         d["comp_serial"]         = Wmi("Win32_BIOS", "SerialNumber");
         d["comp_domain"]         = Wmi("Win32_ComputerSystem", "Domain");
-        d["comp_part_of_domain"] = Wmi("Win32_ComputerSystem", "PartOfDomain") == "True" ? "1" : "0";
+        d["comp_part_of_domain"] = Wmi("Win32_ComputerSystem", "PartOfDomain").ToLower() == "true" ? "1" : "0";
     }
 
     static void CollectCpu(Dictionary<string, string> d)
@@ -66,15 +73,65 @@ public static class HardwareInventory
 
     static void CollectRam(Dictionary<string, string> d)
     {
-        long total = 0; int slots = 0;
-        using var s = new ManagementObjectSearcher("SELECT Capacity FROM Win32_PhysicalMemory");
+        // Total RAM para campo simples do portal
+        long totalBytes = 0;
+        int slots = 0;
+        var modules = new List<string>();
+
+        using var s = new ManagementObjectSearcher(
+            "SELECT Slot,Manufacturer,PartNumber,Speed,MemoryType,Capacity,SerialNumber FROM Win32_PhysicalMemory");
         foreach (ManagementObject o in s.Get())
         {
-            if (long.TryParse(o["Capacity"]?.ToString(), out var c)) total += c;
             slots++;
+            var cap = long.TryParse(o["Capacity"]?.ToString(), out var c) ? c : 0;
+            totalBytes += cap;
+            var capGb = (cap / 1_073_741_824.0).ToString("F1");
+
+            // Formato: slot::brand::model::freq_mhz::mem_type::cap_gb::serial
+            var slot  = o["Slot"]?.ToString()          ?? slots.ToString();
+            var brand = o["Manufacturer"]?.ToString()  ?? "";
+            var model = o["PartNumber"]?.ToString()    ?? "";
+            var freq  = o["Speed"]?.ToString()         ?? "0";
+            var type  = o["MemoryType"]?.ToString()    ?? "";
+            var serial= o["SerialNumber"]?.ToString()  ?? "";
+
+            modules.Add($"{slot}::{brand}::{model}::{freq}::{type}::{capGb}::{serial}");
         }
-        d["total_ram"]          = (total / 1_073_741_824.0).ToString("F0");
-        d["total_memory_slots"] = slots.ToString();
+
+        d["total_ram"]           = (totalBytes / 1_073_741_824.0).ToString("F1");
+        d["total_memory_slots"]  = slots.ToString();
+        d["memory_modules"]      = string.Join("|||", modules);
+    }
+
+    static void CollectDisks(Dictionary<string, string> d)
+    {
+        long totalBytes = 0;
+        var disks = new List<string>();
+
+        using var s = new ManagementObjectSearcher(
+            "SELECT MediaType,Manufacturer,Model,SerialNumber,Size FROM Win32_DiskDrive");
+        foreach (ManagementObject o in s.Get())
+        {
+            var sz = long.TryParse(o["Size"]?.ToString(), out var b) ? b : 0;
+            totalBytes += sz;
+            var capGb = (sz / 1_073_741_824.0).ToString("F0");
+
+            // Tipo: detecta SSD/HDD/NVMe pela MediaType
+            var mediaType = o["MediaType"]?.ToString() ?? "";
+            var diskType  = mediaType.Contains("SSD") || mediaType.Contains("Solid") ? "SSD"
+                          : mediaType.Contains("NVMe")                               ? "NVMe"
+                          : "HDD";
+
+            var brand  = o["Manufacturer"]?.ToString()  ?? "";
+            var model  = o["Model"]?.ToString()         ?? "";
+            var serial = o["SerialNumber"]?.ToString()  ?? "";
+
+            // Formato: disk_type::brand::model::serial::cap_gb
+            disks.Add($"{diskType}::{brand}::{model}::{serial}::{capGb}");
+        }
+
+        d["total_disk"] = (totalBytes / 1_073_741_824.0).ToString("F0");
+        d["disks"]      = string.Join("|||", disks);
     }
 
     static void CollectNetwork(Dictionary<string, string> d)
@@ -106,13 +163,39 @@ public static class HardwareInventory
         catch { d["public_ip"] = ""; }
     }
 
-    static void CollectDisks(Dictionary<string, string> d)
+    static void CollectSoftware(Dictionary<string, string> d)
     {
-        long total = 0;
-        using var s = new ManagementObjectSearcher("SELECT Size FROM Win32_DiskDrive");
-        foreach (ManagementObject o in s.Get())
-            if (long.TryParse(o["Size"]?.ToString(), out var sz)) total += sz;
-        d["total_disk"] = (total / 1_073_741_824.0).ToString("F0");
+        var swList = new List<string>();
+        // Lê do registro em vez de Win32_Product (muito lento, pode causar side effects)
+        foreach (var regPath in new[] {
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+        })
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(regPath);
+                if (key == null) continue;
+                foreach (var sub in key.GetSubKeyNames())
+                {
+                    try
+                    {
+                        using var sk   = key.OpenSubKey(sub);
+                        var name  = sk?.GetValue("DisplayName")?.ToString()    ?? "";
+                        var ver   = sk?.GetValue("DisplayVersion")?.ToString() ?? "";
+                        var date  = sk?.GetValue("InstallDate")?.ToString()    ?? "";
+                        var uninst= sk?.GetValue("UninstallString")?.ToString()?? "";
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        // Formato: name::version::install_date::uninstall_string
+                        swList.Add($"{name}::{ver}::{date}::{uninst}");
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+        d["software"] = string.Join("|||", swList);
+        Logger.LogDebug("Software: {N} itens.", swList.Count);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────

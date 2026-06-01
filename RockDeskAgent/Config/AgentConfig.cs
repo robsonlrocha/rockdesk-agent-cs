@@ -29,7 +29,7 @@ public class AgentConfig
     public static readonly string LogFile    = Path.Combine(ConfigDir, "agent_cs.log");
     public static readonly string SvcName    = "RockDeskAgent";
     public static readonly string SvcDisplay = "RockDesk Agent";
-    public static readonly string AgentVersion = "1.0.4";
+    public static readonly string AgentVersion = "1.0.5";
     public static readonly string PortalDownloadUrl =
         "https://rockdesk.mnti.com.br/downloads/RockDeskAgent.exe";
     public static readonly string PortalDownloadUrlCS =
