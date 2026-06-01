@@ -185,11 +185,13 @@ public class RemoteWorker
             case "key_up":
                 InputInjector.KeyUp(Get(msg, "vk")); break;
             case "ctrl_alt_del":
-                // SendSAS(TRUE) com token SYSTEM → mostra a tela de segurança Windows
-                // (Bloquear / Trocar usuário / Sair / Alterar senha / Gerenciador de Tarefas)
-                // NÃO abrimos Task Manager direto — o usuário escolhe na tela de segurança.
-                bool sasOk = InputInjector.TrySendSAS();
-                _ = SendJsonAsync(new { type = "cad_ack", ok = sasOk, desk = "cs-native" }, _cts.Token);
+                // Mantido por compatibilidade com agente Python (tenta SendSAS)
+                InputInjector.TrySendSAS();
+                _ = SendJsonAsync(new { type = "cad_ack", ok = true, desk = "cs-native" }, _cts.Token);
+                break;
+
+            case "security_action":
+                HandleSecurityAction(msg?["action"]?.GetValue<string>() ?? "");
                 break;
             case "quality":
                 _fps     = Math.Clamp(Get(msg, "fps"),          1, 30);
@@ -197,6 +199,36 @@ public class RemoteWorker
                 break;
             case "viewer_disconnected":
                 _running = false; _cts.Cancel(); break;
+        }
+    }
+
+    private void HandleSecurityAction(string action)
+    {
+        Logger.LogInformation("SecurityAction: {A}", action);
+        switch (action)
+        {
+            case "lock":
+                InputInjector.LockWorkStation();
+                break;
+            case "logoff":
+                InputInjector.Logoff();
+                break;
+            case "taskmgr":
+                InputInjector.TryOpenTaskManager();
+                break;
+            case "switch_user":
+                // Bloqueia e mostra tela de troca de usuário
+                InputInjector.LockWorkStation();
+                break;
+            case "change_password":
+                // Abre o dialog de alteração de senha via control panel
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName        = "control",
+                    Arguments       = "userpasswords",
+                    UseShellExecute = true,
+                });
+                break;
         }
     }
 

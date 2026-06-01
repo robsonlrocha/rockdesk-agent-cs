@@ -11,6 +11,20 @@ public static class InputInjector
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("sas.dll",    EntryPoint = "SendSAS")]
     static extern void SendSAS([MarshalAs(UnmanagedType.Bool)] bool fKeyboardInitiated);
+    [DllImport("user32.dll")] static extern bool LockWorkStation_();
+    [DllImport("user32.dll")] static extern int  ExitWindowsEx(uint flags, uint reason);
+
+    public static void LockWorkStation()
+    {
+        try { LockWorkStation_(); Logger.LogInformation("LockWorkStation OK."); }
+        catch (Exception ex) { Logger.LogWarning("LockWorkStation: {E}", ex.Message); }
+    }
+
+    public static void Logoff()
+    {
+        try { ExitWindowsEx(0x00000004 | 0x00000010, 0); Logger.LogInformation("Logoff iniciado."); }
+        catch (Exception ex) { Logger.LogWarning("Logoff: {E}", ex.Message); }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     struct MOUSEINPUT  { public int dx, dy; public uint data, flags, time; public IntPtr extra; }
