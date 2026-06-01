@@ -7,13 +7,14 @@ using RockDeskAgent.Api;
 using RockDeskAgent.Config;
 using RockDeskAgent.Core;
 
-static class SasDll
+namespace RockDeskAgent.Services;
+
+// P/Invoke para SendSAS — usado pelo sas-watcher do serviço SCM
+internal static class SasDll
 {
     [DllImport("sas.dll", EntryPoint = "SendSAS")]
     public static extern void SendSAS([MarshalAs(UnmanagedType.Bool)] bool fKeyboardInitiated);
 }
-
-namespace RockDeskAgent.Services;
 
 /// <summary>Serviço Windows principal: heartbeat, polling, remote session.</summary>
 public class AgentService : BackgroundService
