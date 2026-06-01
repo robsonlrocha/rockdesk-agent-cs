@@ -11,19 +11,38 @@ public static class InputInjector
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("sas.dll",    EntryPoint = "SendSAS")]
     static extern void SendSAS([MarshalAs(UnmanagedType.Bool)] bool fKeyboardInitiated);
-    [DllImport("user32.dll")] static extern bool LockWorkStation_();
-    [DllImport("user32.dll")] static extern int  ExitWindowsEx(uint flags, uint reason);
-
+    /// <summary>Bloqueia a estação de trabalho via rundll32 (funciona com qualquer token).</summary>
     public static void LockWorkStation()
     {
-        try { LockWorkStation_(); Logger.LogInformation("LockWorkStation OK."); }
+        try
+        {
+            // rundll32 chama LockWorkStation no contexto correto (funciona com SYSTEM em Session N)
+            Run("rundll32.exe", "user32.dll,LockWorkStation");
+            Logger.LogInformation("LockWorkStation: rundll32 chamado.");
+        }
         catch (Exception ex) { Logger.LogWarning("LockWorkStation: {E}", ex.Message); }
     }
 
+    /// <summary>Faz logoff do usuário via shutdown /l.</summary>
     public static void Logoff()
     {
-        try { ExitWindowsEx(0x00000004 | 0x00000010, 0); Logger.LogInformation("Logoff iniciado."); }
+        try
+        {
+            Run("shutdown.exe", "/l /f");
+            Logger.LogInformation("Logoff: shutdown /l /f chamado.");
+        }
         catch (Exception ex) { Logger.LogWarning("Logoff: {E}", ex.Message); }
+    }
+
+    private static void Run(string exe, string args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(exe, args)
+        {
+            UseShellExecute  = true,
+            CreateNoWindow   = true,
+            WindowStyle      = System.Diagnostics.ProcessWindowStyle.Hidden,
+        };
+        System.Diagnostics.Process.Start(psi);
     }
 
     [StructLayout(LayoutKind.Sequential)]

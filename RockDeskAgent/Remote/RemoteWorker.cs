@@ -204,31 +204,44 @@ public class RemoteWorker
 
     private void HandleSecurityAction(string action)
     {
-        Logger.LogInformation("SecurityAction: {A}", action);
-        switch (action)
+        Logger.LogInformation("=== SecurityAction recebido: '{A}' ===", action);
+        try
         {
-            case "lock":
-                InputInjector.LockWorkStation();
-                break;
-            case "logoff":
-                InputInjector.Logoff();
-                break;
-            case "taskmgr":
-                InputInjector.TryOpenTaskManager();
-                break;
-            case "switch_user":
-                // Bloqueia e mostra tela de troca de usuário
-                InputInjector.LockWorkStation();
-                break;
-            case "change_password":
-                // Abre o dialog de alteração de senha via control panel
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName        = "control",
-                    Arguments       = "userpasswords",
-                    UseShellExecute = true,
-                });
-                break;
+            switch (action)
+            {
+                case "lock":
+                    Logger.LogInformation("Executando LockWorkStation...");
+                    InputInjector.LockWorkStation();
+                    break;
+                case "logoff":
+                    Logger.LogInformation("Executando Logoff...");
+                    InputInjector.Logoff();
+                    break;
+                case "taskmgr":
+                    Logger.LogInformation("Abrindo Task Manager...");
+                    InputInjector.TryOpenTaskManager();
+                    break;
+                case "switch_user":
+                    Logger.LogInformation("Switch user via LockWorkStation...");
+                    InputInjector.LockWorkStation();
+                    break;
+                case "change_password":
+                    Logger.LogInformation("Abrindo alteração de senha...");
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName        = "control",
+                        Arguments       = "userpasswords",
+                        UseShellExecute = true,
+                    });
+                    break;
+                default:
+                    Logger.LogWarning("SecurityAction desconhecida: '{A}'", action);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("HandleSecurityAction '{A}' falhou: {E}", action, ex.Message);
         }
     }
 
