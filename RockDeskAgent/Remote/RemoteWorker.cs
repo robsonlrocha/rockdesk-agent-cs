@@ -185,8 +185,14 @@ public class RemoteWorker
             case "key_up":
                 InputInjector.KeyUp(Get(msg, "vk")); break;
             case "ctrl_alt_del":
-                var ok = InputInjector.TrySendSAS();
-                _ = SendJsonAsync(new { type = "cad_ack", ok, desk = "cs-native" }, _cts.Token);
+                // SendSAS: aparece no monitor físico mas BitBlt não captura
+                // (DWM overlay = invisível para CopyFromScreen no Windows 10/11)
+                // Solução: abre Task Manager diretamente (sempre visível, sempre funciona)
+                // + tenta SendSAS como bonus (pode funcionar em alguns sistemas)
+                bool sasOk = InputInjector.TrySendSAS();
+                bool tmOk  = InputInjector.TryOpenTaskManager();
+                _ = SendJsonAsync(new { type = "cad_ack", ok = sasOk || tmOk,
+                                        desk = "cs-native", taskmgr = tmOk }, _cts.Token);
                 break;
             case "quality":
                 _fps     = Math.Clamp(Get(msg, "fps"),          1, 30);

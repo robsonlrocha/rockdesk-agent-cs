@@ -163,8 +163,33 @@ public static class InputInjector
         catch { return false; }
     }
 
-    /// <summary>Disparado quando o desktop muda após SendSAS (para o RemoteWorker trocar imediatamente).</summary>
+    /// <summary>Disparado quando o desktop muda após SendSAS.</summary>
     public static event Action<string>? DesktopChangedAfterSas;
+
+    /// <summary>
+    /// Abre o Gerenciador de Tarefas na sessão do usuário.
+    /// Definitivamente visível no viewer pois usa BitBlt normal.
+    /// Complementa o SendSAS (Windows Security overlay não é capturável pelo BitBlt).
+    /// </summary>
+    public static bool TryOpenTaskManager()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName        = "taskmgr.exe",
+                UseShellExecute = true,
+                CreateNoWindow  = false,
+            });
+            Logger.LogInformation("Task Manager aberto.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("TryOpenTaskManager: {E}", ex.Message);
+            return false;
+        }
+    }
 
     private static void Send(INPUT inp) =>
         SendInput(1, new[] { inp }, Marshal.SizeOf<INPUT>());
