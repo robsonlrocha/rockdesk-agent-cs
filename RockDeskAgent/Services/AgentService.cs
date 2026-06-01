@@ -82,7 +82,7 @@ public class AgentService : BackgroundService
                     try { File.Delete(SasTrigger); } catch { }
                     try
                     {
-                        SasDll.SendSAS(1); // TRUE = keyboard-initiated
+                        SasDll.SendSAS(true); // TRUE = keyboard-initiated
                         Logger.LogInformation("SendSAS(TRUE) executado pelo serviço SCM.");
                     }
                     catch (Exception ex)
