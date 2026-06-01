@@ -58,16 +58,36 @@ void RunAsWindowsService()
 
 void InstallService()
 {
-    var exe = Environment.ProcessPath
+    var src = Environment.ProcessPath
               ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
-    Console.WriteLine($"Instalando serviço '{AgentConfig.SvcName}'...");
 
+    // ── 1. Copia o exe para C:\ProgramData\RockDeskAgent\ ─────────────
+    var installDir = AgentConfig.ConfigDir;           // C:\ProgramData\RockDeskAgent
+    var destExe    = Path.Combine(installDir, "RockDeskAgentCS.exe");
+
+    try
+    {
+        Directory.CreateDirectory(installDir);
+        if (!string.Equals(src, destExe, StringComparison.OrdinalIgnoreCase))
+        {
+            File.Copy(src, destExe, overwrite: true);
+            Console.WriteLine($"Exe copiado para: {destExe}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"ERRO ao copiar exe: {ex.Message}");
+        return;
+    }
+
+    // ── 2. Registra o serviço apontando para a localização correta ─────
+    Console.WriteLine($"Instalando serviço '{AgentConfig.SvcName}'...");
     RunSc($"stop {AgentConfig.SvcName}");
     RunSc($"delete {AgentConfig.SvcName}");
     Thread.Sleep(1500);
 
     var r = RunSc($"create {AgentConfig.SvcName} " +
-                  $"binPath= \"\\\"{exe}\\\" service\" " +
+                  $"binPath= \"\\\"{destExe}\\\" service\" " +
                   $"DisplayName= \"{AgentConfig.SvcDisplay}\" " +
                   $"start= auto obj= LocalSystem");
 
@@ -75,8 +95,8 @@ void InstallService()
     {
         RunSc($"description {AgentConfig.SvcName} \"Agente de monitoramento e suporte remoto RockDesk (C#)\"");
         RunSc($"start {AgentConfig.SvcName}");
-        Console.WriteLine("Serviço instalado e iniciado.");
-        logger.LogInformation("Serviço instalado com sucesso.");
+        Console.WriteLine($"Serviço instalado e iniciado a partir de:\n  {destExe}");
+        logger.LogInformation("Serviço instalado em {Path}", destExe);
     }
     else
     {

@@ -91,14 +91,19 @@ public class SetupForm : Form
 
                 // Pergunta se quer instalar o serviço
                 await Task.Delay(800);
-                if (MessageBox.Show("Instalar como serviço Windows?", "RockDesk Agent",
-                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                if (MessageBox.Show(
+                    "Instalar como serviço Windows?\n\n" +
+                    "O executável será copiado para:\n" +
+                    $"  {AgentConfig.ConfigDir}\\RockDeskAgentCS.exe\n\n" +
+                    "e iniciará automaticamente com o Windows.",
+                    "RockDesk Agent", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 {
                     var exe = Environment.ProcessPath ?? "";
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                     {
-                        FileName  = exe, Arguments = "install",
-                        Verb      = "runas",
+                        FileName        = exe,
+                        Arguments       = "install",
+                        Verb            = "runas",   // eleva para Administrador
                         UseShellExecute = true
                     });
                 }

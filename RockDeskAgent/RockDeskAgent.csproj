@@ -43,9 +43,8 @@
     <!-- WebSocket client para relay -->
     <PackageReference Include="Websocket.Client" Version="5.1.2" />
 
-    <!-- Compressão de imagem JPEG -->
-    <PackageReference Include="SkiaSharp" Version="2.88.8" />
-    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.8" />
+    <!-- System.Drawing para captura + JPEG (bundled no .NET Windows) -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
 
     <!-- WMI para inventário de hardware (System.Management = API clássica WMI) -->
     <PackageReference Include="System.Management" Version="8.0.0" />
