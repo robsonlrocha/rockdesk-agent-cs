@@ -185,9 +185,27 @@ public class RemoteWorker
             case "key_up":
                 InputInjector.KeyUp(Get(msg, "vk")); break;
             case "ctrl_alt_del":
-                // Mantido por compatibilidade com agente Python (tenta SendSAS)
-                InputInjector.TrySendSAS();
-                _ = SendJsonAsync(new { type = "cad_ack", ok = true, desk = "cs-native" }, _cts.Token);
+                // Decide ação baseado no desktop atual
+                var cadDesk = ScreenCapture.SwitchToInputDesktop();
+                Logger.LogInformation("ctrl_alt_del: desktop='{D}'", cadDesk);
+
+                if (cadDesk.Equals("Winlogon", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Tela BLOQUEADA: acorda a tela com Escape (impersonado) + SendSAS
+                    // O usuário verá o campo de senha e pode digitar via teclado
+                    ImpersonatedKey(0x1B); // VK_ESCAPE: acorda a tela de bloqueio
+                    Thread.Sleep(150);
+                    ImpersonatedKey(0x0D); // VK_RETURN: confirma (por segurança)
+                    InputInjector.TrySendSAS(); // para "Require Ctrl+Alt+Del" policy
+                    _ = SendJsonAsync(new { type = "cad_ack", ok = true,
+                                            desk = "Winlogon", action = "wake" }, _cts.Token);
+                }
+                else
+                {
+                    // Desktop DESBLOQUEADO: viewer exibe o menu de segurança
+                    _ = SendJsonAsync(new { type = "cad_ack", ok = true,
+                                            desk = "Default", action = "menu" }, _cts.Token);
+                }
                 break;
 
             case "security_action":
@@ -200,6 +218,28 @@ public class RemoteWorker
             case "viewer_disconnected":
                 _running = false; _cts.Cancel(); break;
         }
+    }
+
+    /// <summary>
+    /// Envia uma tecla com ImpersonateLoggedOnUser — funciona no desktop Winlogon.
+    /// </summary>
+    [DllImport("wtsapi32.dll")] static extern bool WTSQueryUserToken(uint sid, out IntPtr tok);
+    [DllImport("advapi32.dll")] static extern bool ImpersonateLoggedOnUser(IntPtr tok);
+    [DllImport("advapi32.dll")] static extern bool RevertToSelf();
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
+
+    private static void ImpersonatedKey(int vk)
+    {
+        var sid = WTSGetActiveConsoleSessionId();
+        if (!WTSQueryUserToken(sid, out var tok)) { InputInjector.KeyDown(vk); InputInjector.KeyUp(vk); return; }
+        try
+        {
+            if (ImpersonateLoggedOnUser(tok))
+                try { InputInjector.KeyDown(vk); Thread.Sleep(50); InputInjector.KeyUp(vk); }
+                finally { RevertToSelf(); }
+        }
+        finally { CloseHandle(tok); }
     }
 
     private void HandleSecurityAction(string action)
