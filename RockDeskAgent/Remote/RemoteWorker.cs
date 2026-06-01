@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using RockDeskAgent.Api;
 using RockDeskAgent.Config;
 
 namespace RockDeskAgent.Remote;
