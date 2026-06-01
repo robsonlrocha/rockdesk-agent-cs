@@ -11,38 +11,76 @@ public static class InputInjector
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("sas.dll",    EntryPoint = "SendSAS")]
     static extern void SendSAS([MarshalAs(UnmanagedType.Bool)] bool fKeyboardInitiated);
-    /// <summary>Bloqueia a estação de trabalho via rundll32 (funciona com qualquer token).</summary>
+    // ── APIs para Lock / Logoff ───────────────────────────────────────
+    [DllImport("advapi32.dll")] static extern bool ImpersonateLoggedOnUser(IntPtr hToken);
+    [DllImport("advapi32.dll")] static extern bool RevertToSelf();
+    [DllImport("user32.dll",  EntryPoint = "LockWorkStation")]
+    static extern bool LockWS();
+    [DllImport("wtsapi32.dll")] static extern bool WTSQueryUserToken(uint sid, out IntPtr tok);
+    [DllImport("wtsapi32.dll")] static extern bool WTSLogoffSession(IntPtr srv, int sid, bool wait);
+    [DllImport("kernel32.dll")] static extern uint WTSGetActiveConsoleSessionId();
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+    /// <summary>
+    /// Bloqueia via ImpersonateLoggedOnUser + LockWorkStation().
+    /// Impersonar o usuário garante que LockWorkStation age no contexto correto,
+    /// independente do token do processo chamador (SYSTEM ou usuário).
+    /// </summary>
     public static void LockWorkStation()
     {
-        try
+        var sessionId = WTSGetActiveConsoleSessionId();
+        Logger.LogInformation("LockWorkStation: session={S}", sessionId);
+
+        if (WTSQueryUserToken(sessionId, out var userTok))
         {
-            // rundll32 chama LockWorkStation no contexto correto (funciona com SYSTEM em Session N)
-            Run("rundll32.exe", "user32.dll,LockWorkStation");
-            Logger.LogInformation("LockWorkStation: rundll32 chamado.");
+            try
+            {
+                if (ImpersonateLoggedOnUser(userTok))
+                {
+                    try
+                    {
+                        bool ok = LockWS();
+                        Logger.LogInformation("LockWorkStation (impersonado): {Ok}", ok);
+                    }
+                    finally { RevertToSelf(); }
+                }
+                else
+                {
+                    Logger.LogWarning("ImpersonateLoggedOnUser falhou (err={E})",
+                        System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+                }
+            }
+            finally { CloseHandle(userTok); }
         }
-        catch (Exception ex) { Logger.LogWarning("LockWorkStation: {E}", ex.Message); }
+        else
+        {
+            // Fallback: rundll32 sem impersonação
+            Logger.LogWarning("WTSQueryUserToken falhou — tentando rundll32 direto");
+            Run("rundll32.exe", "user32.dll,LockWorkStation");
+        }
     }
 
-    /// <summary>Faz logoff do usuário via shutdown /l.</summary>
+    /// <summary>Faz logoff da sessão ativa via WTSLogoffSession.</summary>
     public static void Logoff()
     {
-        try
+        var sessionId = (int)WTSGetActiveConsoleSessionId();
+        Logger.LogInformation("Logoff: WTSLogoffSession session={S}", sessionId);
+        bool ok = WTSLogoffSession(IntPtr.Zero, sessionId, false);
+        Logger.LogInformation("WTSLogoffSession: {Ok}", ok);
+        if (!ok)
         {
+            Logger.LogWarning("WTSLogoffSession falhou — tentando shutdown /l");
             Run("shutdown.exe", "/l /f");
-            Logger.LogInformation("Logoff: shutdown /l /f chamado.");
         }
-        catch (Exception ex) { Logger.LogWarning("Logoff: {E}", ex.Message); }
     }
 
     private static void Run(string exe, string args)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo(exe, args)
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, args)
         {
-            UseShellExecute  = true,
-            CreateNoWindow   = true,
-            WindowStyle      = System.Diagnostics.ProcessWindowStyle.Hidden,
-        };
-        System.Diagnostics.Process.Start(psi);
+            UseShellExecute = true, CreateNoWindow = true,
+            WindowStyle     = System.Diagnostics.ProcessWindowStyle.Hidden,
+        });
     }
 
     [StructLayout(LayoutKind.Sequential)]
