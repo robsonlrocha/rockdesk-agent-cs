@@ -107,22 +107,40 @@ public static class InputInjector
     }
 
     /// <summary>
-    /// Simula Ctrl+Alt+Del via SendSAS(TRUE).
-    /// Em C# Windows Service genuíno, isso funciona porque o processo
-    /// é registrado no SCM com SeTcbPrivilege habilitado.
+    /// Sinaliza Ctrl+Alt+Del:
+    /// 1. Cria arquivo sas.trigger — o SERVIÇO (SCM) monitora e chama SendSAS(TRUE)
+    ///    (subprocess não é SCM service, então SendSAS direto seria ignorado)
+    /// 2. Tenta SendSAS diretamente como fallback (pode funcionar com SasGeneration=1)
     /// </summary>
     public static bool TrySendSAS()
     {
+        var triggerFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "RockDeskAgent", "sas.trigger");
+
+        // Método 1: file trigger → serviço SCM chama SendSAS (confiável)
         try
         {
-            SendSAS(true); // TRUE = keyboard-initiated SAS
-            Logger.LogInformation("SendSAS(TRUE) executado com sucesso.");
+            Directory.CreateDirectory(Path.GetDirectoryName(triggerFile)!);
+            File.WriteAllText(triggerFile, "1");
+            Logger.LogInformation("SAS trigger criado → serviço enviará SendSAS.");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("SAS trigger falhou: {E}", ex.Message);
+        }
+
+        // Método 2: tentativa direta (funciona se SasGeneration=1 no registro)
+        try
+        {
+            SendSAS(true);
+            Logger.LogInformation("SendSAS(TRUE) direto OK.");
             return true;
         }
         catch (Exception ex)
         {
-            Logger.LogWarning("SendSAS falhou: {E}", ex.Message);
-            return false;
+            Logger.LogDebug("SendSAS direto: {E}", ex.Message);
+            return true; // trigger foi criado, serviço vai enviar
         }
     }
 

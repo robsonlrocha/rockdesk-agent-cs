@@ -1,10 +1,17 @@
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Hosting;
 using RockDeskAgent.Api;
 using RockDeskAgent.Config;
 using RockDeskAgent.Core;
+
+static class SasDll
+{
+    [DllImport("sas.dll", EntryPoint = "SendSAS")]
+    public static extern void SendSAS([MarshalAs(UnmanagedType.Bool)] bool fKeyboardInitiated);
+}
 
 namespace RockDeskAgent.Services;
 
@@ -29,19 +36,63 @@ public class AgentService : BackgroundService
         _api = new PortalClient(_cfg);
     }
 
+    // Arquivo de trigger para SendSAS cross-session (mesmo mecanismo do Python)
+    private static readonly string SasTrigger =
+        Path.Combine(AgentConfig.ConfigDir, "sas.trigger");
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        Logger.LogInformation("RockDesk Agent CS v{V} iniciado.", AgentConfig.AgentVersion);
+        Logger.LogInformation("RockDesk Agent CS v{V} iniciado (SCM service).",
+            AgentConfig.AgentVersion);
         EnableSasGeneration();
 
-        // Coleta inicial de hardware (async em background para não bloquear o startup)
+        // Coleta inicial de hardware em background
         _ = Task.Run(() => SendFullDataAsync(ct), ct);
+
+        // Lança tray icon na sessão do usuário após 5s (como Python)
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(5_000, ct);
+            var trayExe = Path.Combine(AgentConfig.ConfigDir, "RockDeskAgentCS.exe");
+            if (!File.Exists(trayExe))
+                trayExe = Environment.ProcessPath ?? trayExe;
+            SessionHelper.LaunchInUserSession($"\"{trayExe}\" tray");
+        }, ct);
 
         await Task.WhenAll(
             HeartbeatLoopAsync(ct),
             RemoteWatchLoopAsync(ct),
-            CommandPollLoopAsync(ct)
+            CommandPollLoopAsync(ct),
+            SasWatcherAsync(ct)
         );
+    }
+
+    // ── SAS watcher: detecta arquivo trigger e chama SendSAS ─────────
+    // O subprocess remoteWorker cria sas.trigger; o serviço (SCM) chama SendSAS
+    private async Task SasWatcherAsync(CancellationToken ct)
+    {
+        Logger.LogInformation("SAS watcher iniciado (monitorando {F}).", SasTrigger);
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (File.Exists(SasTrigger))
+                {
+                    try { File.Delete(SasTrigger); } catch { }
+                    try
+                    {
+                        SasDll.SendSAS(1); // TRUE = keyboard-initiated
+                        Logger.LogInformation("SendSAS(TRUE) executado pelo serviço SCM.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning("SendSAS falhou: {E}", ex.Message);
+                    }
+                }
+            }
+            catch { }
+            await Task.Delay(500, ct);
+        }
     }
 
     // ── Heartbeat ────────────────────────────────────────────────────

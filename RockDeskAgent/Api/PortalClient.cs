@@ -6,18 +6,22 @@ using RockDeskAgent.Config;
 
 namespace RockDeskAgent.Api;
 
-/// <summary>Cliente HTTP para o portal ASP — compatível com o agente Python.</summary>
+/// <summary>Cliente HTTP para o portal ASP.</summary>
 public class PortalClient
 {
+    private static readonly ILogger Logger = AgentLogger.Get<PortalClient>();
     private readonly HttpClient _http;
     private readonly AgentConfig _cfg;
-    private static readonly ILogger Logger = AgentLogger.Get<PortalClient>();
 
     public PortalClient(AgentConfig cfg)
     {
-        _cfg = cfg;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _http.DefaultRequestHeaders.Add("User-Agent", $"RockDeskAgentCS/{AgentConfig.AgentVersion}");
+        _cfg  = cfg;
+        _http = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+        };
+        _http.DefaultRequestHeaders.Add("User-Agent",
+            $"RockDeskAgentCS/{AgentConfig.AgentVersion}");
     }
 
     /// <summary>POST form-encoded para a API do portal.</summary>
@@ -27,13 +31,34 @@ public class PortalClient
         try
         {
             using var content = new FormUrlEncodedContent(fields);
-            using var resp = await _http.PostAsync(_cfg.PortalUrl, content, ct);
+            using var resp    = await _http.PostAsync(_cfg.PortalUrl, content, ct);
+
             var body = await resp.Content.ReadAsStringAsync(ct);
+            var trimmed = body.TrimStart();
+
+            // Diagnóstico: log quando a resposta não é JSON
+            if (!trimmed.StartsWith("{") && !trimmed.StartsWith("["))
+            {
+                Logger.LogWarning(
+                    "API retornou não-JSON (HTTP {Status}, action={Action}):\n{Body}",
+                    resp.StatusCode,
+                    fields.GetValueOrDefault("action", "?"),
+                    body[..Math.Min(400, body.Length)]);
+                return null;
+            }
+
             return JsonNode.Parse(body);
+        }
+        catch (JsonException jex)
+        {
+            Logger.LogWarning("JSON parse erro (action={A}): {E}",
+                fields.GetValueOrDefault("action", "?"), jex.Message);
+            return null;
         }
         catch (Exception ex)
         {
-            Logger.LogWarning("PortalClient.PostAsync erro: {Msg}", ex.Message);
+            Logger.LogWarning("PostAsync erro (action={A}): {E}",
+                fields.GetValueOrDefault("action", "?"), ex.Message);
             return null;
         }
     }
@@ -53,19 +78,22 @@ public class PortalClient
         }, ct);
 
     public Task<JsonNode?> CheckCommandsAsync(CancellationToken ct = default)
-        => PostAsync(new() { ["action"] = "check_commands", ["device_key"] = _cfg.DeviceKey }, ct);
+        => PostAsync(new() { ["action"] = "check_commands",
+                              ["device_key"] = _cfg.DeviceKey }, ct);
 
     public Task<JsonNode?> CheckRemotePendingAsync(CancellationToken ct = default)
-        => PostAsync(new() { ["action"] = "check_remote_pending", ["device_key"] = _cfg.DeviceKey }, ct);
+        => PostAsync(new() { ["action"] = "check_remote_pending",
+                              ["device_key"] = _cfg.DeviceKey }, ct);
 
     public Task<JsonNode?> GetRemoteSessionQueueAsync(CancellationToken ct = default)
-        => PostAsync(new() { ["action"] = "get_remote_session_queue", ["device_key"] = _cfg.DeviceKey }, ct);
+        => PostAsync(new() { ["action"] = "get_remote_session_queue",
+                              ["device_key"] = _cfg.DeviceKey }, ct);
 
     public Task<JsonNode?> UpdateRemoteSessionStatusAsync(int queueId, string status,
                                                            string? errorLog = null,
                                                            CancellationToken ct = default)
     {
-        var fields = new Dictionary<string, string>
+        var f = new Dictionary<string, string>
         {
             ["action"]     = "update_remote_session_status",
             ["device_key"] = _cfg.DeviceKey,
@@ -73,18 +101,15 @@ public class PortalClient
             ["status"]     = status,
         };
         if (!string.IsNullOrEmpty(errorLog))
-            fields["error_log"] = errorLog[..Math.Min(errorLog.Length, 490)];
-        return PostAsync(fields, ct);
+            f["error_log"] = errorLog[..Math.Min(errorLog.Length, 490)];
+        return PostAsync(f, ct);
     }
 
     public Task<JsonNode?> VerifyCodeAsync(string code, string hostname,
                                             CancellationToken ct = default)
-        => PostAsync(new()
-        {
-            ["action"]   = "verify",
-            ["code"]     = code,
-            ["hostname"] = hostname,
-        }, ct);
+        => PostAsync(new() { ["action"] = "verify",
+                              ["code"]   = code,
+                              ["hostname"] = hostname }, ct);
 
     public Task<JsonNode?> SendFullDataAsync(Dictionary<string, string> hwData,
                                               CancellationToken ct = default)

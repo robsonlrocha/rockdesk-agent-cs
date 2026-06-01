@@ -42,6 +42,13 @@ switch (cmd)
         RemoveService();
         break;
 
+    // ── Bandeja (lançado pelo serviço na sessão do usuário) ──────────
+    case "tray":
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new RockDeskAgent.Tray.TrayApp());
+        break;
+
     // ── Wizard de registro ────────────────────────────────────────────
     case "setup":
         Application.EnableVisualStyles();
