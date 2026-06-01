@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using Microsoft.Extensions.Hosting;
 using RockDeskAgent.Api;
 using RockDeskAgent.Config;
@@ -21,11 +24,14 @@ public class AgentService : BackgroundService
     const int RemoteWatchInt  = 2;
     const int DataInt         = 3600;
 
-    public AgentService()
+    public AgentService(ILogger<AgentService> log)
     {
         _cfg = AgentConfig.Load();
         _api = new PortalClient(_cfg);
     }
+
+    // Construtor sem parâmetros para compatibilidade com modo debug
+    public AgentService() : this(AgentLogger.Get<AgentService>()) { }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -151,13 +157,13 @@ public class AgentService : BackgroundService
 
     private static string GetPrivateIp()
     {
-        foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
             foreach (var ua in ni.GetIPProperties().UnicastAddresses)
             {
-                if (ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
-                    !System.Net.IPAddress.IsLoopback(ua.Address))
+                if (ua.Address.AddressFamily == AddressFamily.InterNetwork &&
+                    !IPAddress.IsLoopback(ua.Address))
                     return ua.Address.ToString();
             }
         }

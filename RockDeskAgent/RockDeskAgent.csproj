@@ -37,8 +37,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
 
-    <!-- JSON serialization -->
-    <PackageReference Include="System.Text.Json" Version="8.0.0" />
+    <!-- JSON serialization (bundled in .NET 8, version explícita fixa vuln) -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
 
     <!-- WebSocket client para relay -->
     <PackageReference Include="Websocket.Client" Version="5.1.2" />
@@ -47,8 +47,8 @@
     <PackageReference Include="SkiaSharp" Version="2.88.8" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.8" />
 
-    <!-- WMI para inventário de hardware -->
-    <PackageReference Include="Microsoft.Management.Infrastructure" Version="3.0.0" />
+    <!-- WMI para inventário de hardware (System.Management = API clássica WMI) -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

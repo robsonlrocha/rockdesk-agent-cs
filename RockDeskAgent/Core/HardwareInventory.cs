@@ -2,7 +2,6 @@ using System.Management;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
 using RockDeskAgent.Config;
 
 namespace RockDeskAgent.Core;
