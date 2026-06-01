@@ -64,7 +64,11 @@ public class RemoteWorker
             Logger.LogInformation("RemoteWorker: conectado ao relay (C# WebSocket nativo)");
             _running = true;
 
-            // Envia screen_info inicial
+            // Troca o thread de receive para o desktop de input (para SendSAS e input)
+            var desk = ScreenCapture.SwitchToInputDesktop();
+            Logger.LogInformation("RemoteWorker: receive thread → desktop='{D}'", desk);
+
+            // Envia screen_info inicial (dimensões reais virão do capture loop)
             await SendJsonAsync(new { type = "screen_info", w = _screenW, h = _screenH }, ct);
 
             // Inicia loop de captura em background
@@ -89,30 +93,64 @@ public class RemoteWorker
     // ── Captura de tela → relay ────────────────────────────────────────
     private async Task CaptureLoopAsync(CancellationToken ct)
     {
-        var interval = TimeSpan.FromSeconds(1.0 / _fps);
+        // Garante que este thread está no desktop correto antes de capturar
+        var deskName = ScreenCapture.SwitchToInputDesktop();
+        Logger.LogInformation("CaptureLoop: desktop='{D}'", deskName);
+
+        var interval   = TimeSpan.FromSeconds(1.0 / _fps);
+        int framesSent = 0;
+        int frameCheck = 0;
+
         while (_running && !ct.IsCancellationRequested)
         {
             var t0 = DateTime.UtcNow;
             try
             {
+                // A cada 60 frames (~4s a 15fps), verifica se desktop mudou
+                frameCheck++;
+                if (frameCheck % 60 == 0)
+                {
+                    var newDesk = ScreenCapture.SwitchToInputDesktop();
+                    if (newDesk != deskName)
+                    {
+                        Logger.LogInformation("Desktop mudou: '{Old}' → '{New}'", deskName, newDesk);
+                        deskName = newDesk;
+                        // Reinicia captura com nova resolução
+                        _capture?.Dispose();
+                        _capture = new ScreenCapture();
+                        _screenW = _capture.Width;
+                        _screenH = _capture.Height;
+                        await SendJsonAsync(new { type = "screen_info", w = _screenW, h = _screenH }, ct);
+                    }
+                }
+
                 var jpeg = _capture?.CaptureJpeg(_quality);
                 if (jpeg != null && _ws?.State == WebSocketState.Open)
                 {
-                    // Protocolo: [0x01][JPEG bytes]
                     var frame = new byte[1 + jpeg.Length];
                     frame[0] = 0x01;
                     Buffer.BlockCopy(jpeg, 0, frame, 1, jpeg.Length);
                     await _ws.SendAsync(frame, WebSocketMessageType.Binary, true, ct);
+                    framesSent++;
+                    if (framesSent == 1)
+                        Logger.LogInformation("1º frame enviado ({Kb} KB)", jpeg.Length / 1024);
+                }
+                else if (jpeg == null)
+                {
+                    Logger.LogDebug("CaptureJpeg retornou null — aguardando...");
+                    await Task.Delay(500, ct); // Backoff em caso de falha
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                Logger.LogDebug("CaptureLoop erro frame: {E}", ex.Message);
+                Logger.LogWarning("CaptureLoop erro: {E}", ex.Message);
+                await Task.Delay(1000, ct);
             }
             var elapsed = DateTime.UtcNow - t0;
             var sleep   = interval - elapsed;
             if (sleep > TimeSpan.Zero) await Task.Delay(sleep, ct);
         }
+        Logger.LogInformation("CaptureLoop encerrado. Frames enviados: {N}", framesSent);
     }
 
     // ── Recebe mensagens do viewer via relay ───────────────────────────
