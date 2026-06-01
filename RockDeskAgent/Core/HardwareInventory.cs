@@ -6,7 +6,10 @@ using RockDeskAgent.Config;
 
 namespace RockDeskAgent.Core;
 
-/// <summary>Coleta informações de hardware via WMI — compatível com a API do portal.</summary>
+/// <summary>
+/// Coleta hardware/software via WMI e envia para o portal.
+/// Campos idênticos ao agente Python para compatibilidade total.
+/// </summary>
 public static class HardwareInventory
 {
     private static readonly ILogger Logger = AgentLogger.GetNamed(nameof(HardwareInventory));
@@ -21,111 +24,60 @@ public static class HardwareInventory
             ["agent_version"] = AgentConfig.AgentVersion + "-cs",
         };
 
-        Logger.LogInformation("Coletando hardware...");
-
         Safe("computador",  () => CollectComputer(d));
         Safe("CPU",         () => CollectCpu(d));
         Safe("OS",          () => CollectOs(d));
-        Safe("memória",     () => CollectMemory(d));
+        Safe("RAM",         () => CollectRam(d));
         Safe("rede",        () => CollectNetwork(d));
         Safe("IP público",  () => CollectPublicIp(d));
         Safe("discos",      () => CollectDisks(d));
-        Safe("software",    () => CollectSoftware(d));
 
-        Logger.LogInformation("Hardware coletado: {Count} campos.", d.Count);
+        Logger.LogInformation("Hardware coletado ({N} campos).", d.Count);
         return d;
     }
 
-    private static void Safe(string section, Action fn)
-    {
-        try { fn(); }
-        catch (Exception ex) { Logger.LogWarning("Coleta {S}: {E}", section, ex.Message); }
-    }
-
-    // ── Helpers WMI ────────────────────────────────────────────────────
-    private static string Wmi(string cls, string prop, string? where = null)
-    {
-        try
-        {
-            var query = $"SELECT {prop} FROM {cls}" + (where != null ? $" WHERE {where}" : "");
-            using var s = new ManagementObjectSearcher(query);
-            foreach (ManagementObject o in s.Get())
-            {
-                var v = o[prop]?.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(v)) return v;
-            }
-        }
-        catch (Exception ex) { Logger.LogDebug("WMI {C}.{P}: {E}", cls, prop, ex.Message); }
-        return "";
-    }
-
-    private static List<Dictionary<string, string>> WmiAll(string cls, params string[] props)
-    {
-        var result = new List<Dictionary<string, string>>();
-        try
-        {
-            var query = $"SELECT {string.Join(",", props)} FROM {cls}";
-            using var s = new ManagementObjectSearcher(query);
-            foreach (ManagementObject o in s.Get())
-            {
-                var row = new Dictionary<string, string>();
-                foreach (var p in props)
-                    row[p] = o[p]?.ToString()?.Trim() ?? "";
-                result.Add(row);
-            }
-        }
-        catch (Exception ex) { Logger.LogDebug("WmiAll {C}: {E}", cls, ex.Message); }
-        return result;
-    }
-
     // ── Seções ─────────────────────────────────────────────────────────
-    private static void CollectComputer(Dictionary<string, string> d)
+    static void CollectComputer(Dictionary<string, string> d)
     {
-        d["comp_manufacturer"]  = Wmi("Win32_ComputerSystem", "Manufacturer");
-        d["comp_brand"]         = d["comp_manufacturer"];
-        d["comp_model"]         = Wmi("Win32_ComputerSystem", "Model");
-        d["comp_serial"]        = Wmi("Win32_BIOS", "SerialNumber");
-        d["comp_domain"]        = Wmi("Win32_ComputerSystem", "Domain");
-        d["comp_part_of_domain"]= Wmi("Win32_ComputerSystem", "PartOfDomain") == "True" ? "1" : "0";
+        d["comp_manufacturer"]   = Wmi("Win32_ComputerSystem", "Manufacturer");
+        d["comp_brand"]          = d["comp_manufacturer"];
+        d["comp_model"]          = Wmi("Win32_ComputerSystem", "Model");
+        d["comp_serial"]         = Wmi("Win32_BIOS", "SerialNumber");
+        d["comp_domain"]         = Wmi("Win32_ComputerSystem", "Domain");
+        d["comp_part_of_domain"] = Wmi("Win32_ComputerSystem", "PartOfDomain") == "True" ? "1" : "0";
     }
 
-    private static void CollectCpu(Dictionary<string, string> d)
+    static void CollectCpu(Dictionary<string, string> d)
     {
-        d["cpu_model"]  = Wmi("Win32_Processor", "Name");
-        d["cpu_brand"]  = Wmi("Win32_Processor", "Manufacturer");
-        d["cpu_count"]  = Wmi("Win32_ComputerSystem", "NumberOfLogicalProcessors");
-        d["cpu_serial"] = Wmi("Win32_Processor", "ProcessorId");
-        // Geração Intel (ex: "10th Gen")
-        var gen = Wmi("Win32_Processor", "Description");
-        d["cpu_generation"] = gen;
+        d["cpu_model"]      = Wmi("Win32_Processor", "Name");
+        d["cpu_brand"]      = Wmi("Win32_Processor", "Manufacturer");
+        d["cpu_count"]      = Wmi("Win32_ComputerSystem", "NumberOfLogicalProcessors");
+        d["cpu_serial"]     = Wmi("Win32_Processor", "ProcessorId");
+        d["cpu_generation"] = Wmi("Win32_Processor", "Description");
     }
 
-    private static void CollectOs(Dictionary<string, string> d)
+    static void CollectOs(Dictionary<string, string> d)
     {
         d["os_name"]         = Wmi("Win32_OperatingSystem", "Caption");
         d["os_arch"]         = Wmi("Win32_OperatingSystem", "OSArchitecture");
-        d["os_install_date"] = FormatWmiDate(Wmi("Win32_OperatingSystem", "InstallDate"));
-        d["os_last_boot"]    = FormatWmiDate(Wmi("Win32_OperatingSystem", "LastBootUpTime"));
+        d["os_install_date"] = FormatDate(Wmi("Win32_OperatingSystem", "InstallDate"));
+        d["os_last_boot"]    = FormatDate(Wmi("Win32_OperatingSystem", "LastBootUpTime"));
     }
 
-    private static void CollectMemory(Dictionary<string, string> d)
+    static void CollectRam(Dictionary<string, string> d)
     {
-        var sticks = WmiAll("Win32_PhysicalMemory",
-            "Capacity", "Manufacturer", "Speed", "MemoryType", "PartNumber");
-        long total = 0;
-        var rows = new List<string>();
-        foreach (var s in sticks)
+        long total = 0; int slots = 0;
+        using var s = new ManagementObjectSearcher("SELECT Capacity FROM Win32_PhysicalMemory");
+        foreach (ManagementObject o in s.Get())
         {
-            var cap = long.TryParse(s.GetValueOrDefault("Capacity", "0"), out var c) ? c : 0;
-            total += cap;
-            rows.Add($"{s.GetValueOrDefault("Manufacturer")}|{cap / 1_073_741_824}GB|{s.GetValueOrDefault("Speed")}MHz");
+            if (long.TryParse(o["Capacity"]?.ToString(), out var c)) total += c;
+            slots++;
         }
-        d["total_memory_gb"]    = (total / 1_073_741_824.0).ToString("F1");
-        d["total_memory_slots"] = sticks.Count.ToString();
-        d["memory_sticks_json"] = System.Text.Json.JsonSerializer.Serialize(rows);
+        d["total_ram"]          = (total / 1_073_741_824.0).ToString("F0");
+        d["total_memory_slots"] = slots.ToString();
     }
 
-    private static void CollectNetwork(Dictionary<string, string> d)
+    static void CollectNetwork(Dictionary<string, string> d)
     {
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
@@ -136,48 +88,56 @@ public static class HardwareInventory
                 if (ua.Address.AddressFamily == AddressFamily.InterNetwork &&
                     !IPAddress.IsLoopback(ua.Address))
                 {
-                    d["private_ip"]  = ua.Address.ToString();
-                    d["mac_address"] = BitConverter.ToString(ni.GetPhysicalAddress().GetAddressBytes())
-                                       .Replace("-", ":");
-                    d["adapter_name"] = ni.Name;
+                    d["private_ip"] = ua.Address.ToString();
                     return;
                 }
             }
         }
-        d["private_ip"]  = "";
-        d["mac_address"] = "";
+        d["private_ip"] = "";
     }
 
-    private static void CollectPublicIp(Dictionary<string, string> d)
+    static void CollectPublicIp(Dictionary<string, string> d)
     {
         try
         {
             using var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            d["public_ip"] = hc.GetStringAsync("https://api.ipify.org")
-                               .GetAwaiter().GetResult().Trim();
+            d["public_ip"] = hc.GetStringAsync("https://api.ipify.org").GetAwaiter().GetResult().Trim();
         }
         catch { d["public_ip"] = ""; }
     }
 
-    private static void CollectDisks(Dictionary<string, string> d)
+    static void CollectDisks(Dictionary<string, string> d)
     {
-        var disks = WmiAll("Win32_DiskDrive",
-            "Model", "SerialNumber", "Size", "MediaType");
-        d["disk_count"] = disks.Count.ToString();
-        long totalBytes = 0;
-        foreach (var dk in disks)
-            if (long.TryParse(dk.GetValueOrDefault("Size", "0"), out var sz)) totalBytes += sz;
-        d["total_disk_gb"] = (totalBytes / 1_073_741_824.0).ToString("F0");
+        long total = 0;
+        using var s = new ManagementObjectSearcher("SELECT Size FROM Win32_DiskDrive");
+        foreach (ManagementObject o in s.Get())
+            if (long.TryParse(o["Size"]?.ToString(), out var sz)) total += sz;
+        d["total_disk"] = (total / 1_073_741_824.0).ToString("F0");
     }
 
-    private static void CollectSoftware(Dictionary<string, string> d)
+    // ── Helpers ────────────────────────────────────────────────────────
+    static void Safe(string sec, Action fn)
     {
-        // Envia contagem apenas — lista completa pelo portal via WMI é muito grande
-        var sw = WmiAll("Win32_Product", "Name");
-        d["software_count"] = sw.Count.ToString();
+        try { fn(); }
+        catch (Exception ex) { Logger.LogWarning("Coleta {S}: {E}", sec, ex.Message); }
     }
 
-    private static string FormatWmiDate(string raw)
+    static string Wmi(string cls, string prop)
+    {
+        try
+        {
+            using var s = new ManagementObjectSearcher($"SELECT {prop} FROM {cls}");
+            foreach (ManagementObject o in s.Get())
+            {
+                var v = o[prop]?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(v)) return v;
+            }
+        }
+        catch (Exception ex) { Logger.LogDebug("WMI {C}.{P}: {E}", cls, prop, ex.Message); }
+        return "";
+    }
+
+    static string FormatDate(string raw)
     {
         if (raw.Length >= 14 &&
             DateTime.TryParseExact(raw[..14], "yyyyMMddHHmmss",

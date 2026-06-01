@@ -5,11 +5,10 @@ using Microsoft.Extensions.Hosting;
 using RockDeskAgent.Api;
 using RockDeskAgent.Config;
 using RockDeskAgent.Core;
-using RockDeskAgent.Remote;
 
 namespace RockDeskAgent.Services;
 
-/// <summary>Windows Service principal — gerencia heartbeat, polling e sessões remotas.</summary>
+/// <summary>Serviço Windows principal: heartbeat, polling, remote session.</summary>
 public class AgentService : BackgroundService
 {
     private static readonly ILogger Logger = AgentLogger.Get<AgentService>();
@@ -18,80 +17,50 @@ public class AgentService : BackgroundService
     private readonly PortalClient _api;
     private readonly SemaphoreSlim _workerLock = new(1, 1);
 
-    // Intervalos (segundos)
-    const int HeartbeatInt    = 300;
-    const int CmdCheckInt     = 30;
-    const int RemoteWatchInt  = 2;
-    const int DataInt         = 3600;
+    const int HeartbeatSec   = 300;
+    const int CmdCheckSec    = 30;
+    const int RemoteWatchSec = 2;
+    const int DataIntervalSec= 3600;
 
-    public AgentService(ILogger<AgentService> log)
+    public AgentService() : this(null) { }
+    public AgentService(ILogger<AgentService>? _)
     {
         _cfg = AgentConfig.Load();
         _api = new PortalClient(_cfg);
     }
 
-    // Construtor sem parâmetros para compatibilidade com modo debug
-    public AgentService() : this(AgentLogger.Get<AgentService>()) { }
-
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        Logger.LogInformation("RockDesk Agent CS v{Ver} iniciado (serviço SCM).",
-                              AgentConfig.AgentVersion);
-
-        // Habilita SendSAS via registro (backup para configs legadas)
+        Logger.LogInformation("RockDesk Agent CS v{V} iniciado.", AgentConfig.AgentVersion);
         EnableSasGeneration();
 
-        // Coleta inicial de hardware
-        await SendFullDataAsync(ct);
+        // Coleta inicial de hardware (async em background para não bloquear o startup)
+        _ = Task.Run(() => SendFullDataAsync(ct), ct);
 
-        // Threads paralelas: heartbeat + remote watcher
-        var tasks = new[]
-        {
+        await Task.WhenAll(
             HeartbeatLoopAsync(ct),
-            CommandPollLoopAsync(ct),
             RemoteWatchLoopAsync(ct),
-        };
-        await Task.WhenAll(tasks);
-
-        Logger.LogInformation("AgentService encerrado.");
+            CommandPollLoopAsync(ct)
+        );
     }
 
-    // ── Heartbeat a cada 5 min ─────────────────────────────────────────
+    // ── Heartbeat ────────────────────────────────────────────────────
     private async Task HeartbeatLoopAsync(CancellationToken ct)
     {
+        await Task.Delay(5_000, ct);  // aguarda 5s antes do primeiro heartbeat
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await _api.HeartbeatAsync(
-                    Environment.MachineName, GetPrivateIp(), "", ct);
+                await _api.HeartbeatAsync(Environment.MachineName, GetPrivateIp(), "", ct);
                 Logger.LogInformation("Heartbeat enviado.");
             }
-            catch (Exception ex) { Logger.LogWarning("Heartbeat erro: {E}", ex.Message); }
-
-            await Task.Delay(TimeSpan.FromSeconds(HeartbeatInt), ct);
+            catch (Exception ex) { Logger.LogDebug("Heartbeat: {E}", ex.Message); }
+            await Task.Delay(TimeSpan.FromSeconds(HeartbeatSec), ct);
         }
     }
 
-    // ── Polling de comandos a cada 30s ─────────────────────────────────
-    private async Task CommandPollLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                var r = await _api.CheckCommandsAsync(ct);
-                if (r?["has_pending"]?.GetValue<bool>() == true)
-                    Logger.LogInformation("Comandos pendentes detectados.");
-                // TODO: processar filas de comandos (senha, usuário, screenshot, etc.)
-            }
-            catch (Exception ex) { Logger.LogDebug("CommandPoll erro: {E}", ex.Message); }
-
-            await Task.Delay(TimeSpan.FromSeconds(CmdCheckInt), ct);
-        }
-    }
-
-    // ── Remote session watcher a cada 2s ──────────────────────────────
+    // ── Remote session watcher — 2 s ─────────────────────────────────
     private async Task RemoteWatchLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -100,72 +69,103 @@ public class AgentService : BackgroundService
             {
                 var r = await _api.CheckRemotePendingAsync(ct);
                 if (r?["has_pending"]?.GetValue<bool>() == true)
-                {
-                    Logger.LogInformation("Sessão remota pendente — iniciando worker.");
                     _ = LaunchRemoteWorkerAsync(ct);
-                }
             }
-            catch (Exception ex) { Logger.LogDebug("RemoteWatch erro: {E}", ex.Message); }
-
-            await Task.Delay(TimeSpan.FromSeconds(RemoteWatchInt), ct);
+            catch (Exception ex) { Logger.LogDebug("RemoteWatch: {E}", ex.Message); }
+            await Task.Delay(TimeSpan.FromSeconds(RemoteWatchSec), ct);
         }
     }
 
     private async Task LaunchRemoteWorkerAsync(CancellationToken ct)
     {
-        // Apenas 1 worker por vez
-        if (!await _workerLock.WaitAsync(0)) return;
+        if (!await _workerLock.WaitAsync(0)) return; // apenas 1 worker por vez
         try
         {
             var r = await _api.GetRemoteSessionQueueAsync(ct);
             var job = r?["job"];
-            if (job == null) return;
+            if (job == null) { return; }
 
-            var jid   = job["id"]?.GetValue<int>()     ?? 0;
+            var jid   = job["id"]?.GetValue<int>()      ?? 0;
             var token = job["token"]?.GetValue<string>() ?? "";
             var relay = job["relay"]?.GetValue<string>() ?? "";
             if (jid == 0 || string.IsNullOrEmpty(token)) return;
 
-            Logger.LogInformation("Iniciando RemoteWorker (job {Jid}).", jid);
-            var worker = new RemoteWorker(_cfg, token, relay, jid);
-            await worker.RunAsync(ct);
+            // Exe instalado em ProgramData
+            var exe = Path.Combine(AgentConfig.ConfigDir, "RockDeskAgentCS.exe");
+            if (!File.Exists(exe))
+            {
+                exe = Environment.ProcessPath ?? exe;
+                Logger.LogWarning("Exe não encontrado em {Path}, usando {Fallback}",
+                    Path.Combine(AgentConfig.ConfigDir, "RockDeskAgentCS.exe"), exe);
+            }
 
-            await _api.UpdateRemoteSessionStatusAsync(jid, "ended", null, ct);
+            var cmd = $"\"{exe}\" remoteWorker \"{token}\" \"{relay}\" \"{jid}\"";
+            Logger.LogInformation("Lançando remote worker (job {J}) na sessão do usuário.", jid);
+
+            // Lança como subprocess na sessão interativa do usuário (como o Python faz)
+            bool launched = SessionHelper.LaunchInUserSession(cmd);
+            if (!launched)
+            {
+                Logger.LogWarning("Falha ao lançar na sessão do usuário — sem sessão ativa?");
+                await _api.UpdateRemoteSessionStatusAsync(jid, "error",
+                    "LaunchInUserSession falhou — sessão não encontrada", ct);
+            }
+            // O worker se encerra sozinho e atualiza o status via API
         }
         catch (Exception ex)
         {
-            Logger.LogWarning("RemoteWorker erro: {E}", ex.Message);
+            Logger.LogWarning("LaunchRemoteWorker: {E}", ex.Message);
         }
         finally
         {
-            _workerLock.Release();
+            // Aguarda 30s antes de liberar o lock (tempo para o worker conectar)
+            _ = Task.Run(async () => {
+                await Task.Delay(30_000);
+                _workerLock.Release();
+            });
         }
     }
 
-    // ── Coleta completa de hardware ────────────────────────────────────
-    private async Task SendFullDataAsync(CancellationToken ct)
+    // ── Command poll ─────────────────────────────────────────────────
+    private async Task CommandPollLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var r = await _api.CheckCommandsAsync(ct);
+                // TODO: processar filas de uninstall, passwd, etc.
+            }
+            catch (Exception ex) { Logger.LogDebug("CommandPoll: {E}", ex.Message); }
+            await Task.Delay(TimeSpan.FromSeconds(CmdCheckSec), ct);
+        }
+    }
+
+    // ── Hardware/software ────────────────────────────────────────────
+    internal async Task SendFullDataAsync(CancellationToken ct)
     {
         try
         {
-            Logger.LogInformation("Coletando hardware/software...");
+            Logger.LogInformation("Iniciando coleta de hardware...");
             var hw = HardwareInventory.Collect(_cfg);
             var r  = await _api.SendFullDataAsync(hw, ct);
-            Logger.LogInformation("Hardware enviado: {Ok}", r?["success"]?.GetValue<bool>());
+            var ok = r?["success"]?.GetValue<bool>() ?? false;
+            Logger.LogInformation("Hardware enviado: success={Ok}", ok);
         }
-        catch (Exception ex) { Logger.LogWarning("SendFullData erro: {E}", ex.Message); }
+        catch (Exception ex) { Logger.LogWarning("SendFullData: {E}", ex.Message); }
     }
 
+    // ── Helpers ──────────────────────────────────────────────────────
     private static string GetPrivateIp()
     {
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
             foreach (var ua in ni.GetIPProperties().UnicastAddresses)
-            {
                 if (ua.Address.AddressFamily == AddressFamily.InterNetwork &&
                     !IPAddress.IsLoopback(ua.Address))
                     return ua.Address.ToString();
-            }
         }
         return "";
     }
@@ -174,11 +174,10 @@ public class AgentService : BackgroundService
     {
         try
         {
-            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+            using var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", true);
-            key?.SetValue("SasGeneration", 1, Microsoft.Win32.RegistryValueKind.DWord);
-            Logger.LogInformation("SasGeneration=1 configurado.");
+            k?.SetValue("SasGeneration", 1, Microsoft.Win32.RegistryValueKind.DWord);
         }
-        catch (Exception ex) { Logger.LogWarning("SasGeneration: {E}", ex.Message); }
+        catch { }
     }
 }

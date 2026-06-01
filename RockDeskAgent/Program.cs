@@ -2,85 +2,90 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RockDeskAgent;
 using RockDeskAgent.Config;
+using RockDeskAgent.Remote;
 using RockDeskAgent.Services;
 
-// ── Inicialização do logger ────────────────────────────────────────────────
 AgentLogger.Init();
 var logger = AgentLogger.Get<Program>();
 
 var cmd = args.Length > 0 ? args[0].ToLower() : "";
 
-// ── Dispatcher de modo de execução ────────────────────────────────────────
 switch (cmd)
 {
+    // ── Chamado pelo SCM ───────────────────────────────────────────────
     case "service":
-        RunAsWindowsService();
+        Host.CreateDefaultBuilder()
+            .UseWindowsService(o => o.ServiceName = AgentConfig.SvcName)
+            .ConfigureServices(s => s.AddHostedService<AgentService>())
+            .Build().Run();
         break;
 
+    // ── Remote worker (subprocess na sessão do usuário) ───────────────
+    // args: remoteWorker <token> <relayUrl> <queueId>
+    case "remoteworker":
+        if (args.Length >= 4)
+        {
+            var cfg = AgentConfig.Load();
+            var worker = new RemoteWorker(cfg, args[1], args[2], int.Parse(args[3]));
+            await worker.RunAsync();
+        }
+        break;
+
+    // ── Instalar serviço ──────────────────────────────────────────────
     case "install":
         InstallService();
         break;
 
+    // ── Remover serviço ───────────────────────────────────────────────
     case "remove":
     case "uninstall":
         RemoveService();
         break;
 
+    // ── Wizard de registro ────────────────────────────────────────────
     case "setup":
-        RunSetup();
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new RockDeskAgent.Setup.SetupForm());
         break;
 
+    // ── Debug console ─────────────────────────────────────────────────
     case "debug":
-        await RunDebugAsync();
+        logger.LogInformation("Modo debug — Ctrl+C para parar.");
+        using (var cts = new CancellationTokenSource())
+        {
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            var svc = new AgentService();
+            await svc.StartAsync(cts.Token);
+            try { await Task.Delay(Timeout.Infinite, cts.Token); } catch { }
+            await svc.StopAsync(CancellationToken.None);
+        }
         break;
 
+    // ── Duplo-clique / sem args ───────────────────────────────────────
     default:
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         var cfgD = AgentConfig.Load();
         if (cfgD.IsRegistered)
-            RunTray();
+            Application.Run(new RockDeskAgent.Tray.TrayApp());
         else
-            RunSetup();
+            Application.Run(new RockDeskAgent.Setup.SetupForm());
         break;
 }
 
-// ── Implementações ─────────────────────────────────────────────────────────
-
-void RunAsWindowsService()
-{
-    logger.LogInformation("Iniciando como Windows Service.");
-    Host.CreateDefaultBuilder()
-        .UseWindowsService(o => o.ServiceName = AgentConfig.SvcName)
-        .ConfigureServices(s => s.AddHostedService<AgentService>())
-        .ConfigureLogging(l => l.SetMinimumLevel(LogLevel.Information))
-        .Build()
-        .Run();
-}
-
+// ── Helpers de instalação ─────────────────────────────────────────────────
 void InstallService()
 {
-    var src = Environment.ProcessPath
-              ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
+    var src     = Environment.ProcessPath
+                  ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
+    var destExe = Path.Combine(AgentConfig.ConfigDir, "RockDeskAgentCS.exe");
 
-    // ── 1. Copia o exe para C:\ProgramData\RockDeskAgent\ ─────────────
-    var installDir = AgentConfig.ConfigDir;           // C:\ProgramData\RockDeskAgent
-    var destExe    = Path.Combine(installDir, "RockDeskAgentCS.exe");
+    Console.WriteLine($"Copiando exe para {destExe}...");
+    Directory.CreateDirectory(AgentConfig.ConfigDir);
+    if (!string.Equals(src, destExe, StringComparison.OrdinalIgnoreCase))
+        File.Copy(src, destExe, overwrite: true);
 
-    try
-    {
-        Directory.CreateDirectory(installDir);
-        if (!string.Equals(src, destExe, StringComparison.OrdinalIgnoreCase))
-        {
-            File.Copy(src, destExe, overwrite: true);
-            Console.WriteLine($"Exe copiado para: {destExe}");
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"ERRO ao copiar exe: {ex.Message}");
-        return;
-    }
-
-    // ── 2. Registra o serviço apontando para a localização correta ─────
     Console.WriteLine($"Instalando serviço '{AgentConfig.SvcName}'...");
     RunSc($"stop {AgentConfig.SvcName}");
     RunSc($"delete {AgentConfig.SvcName}");
@@ -93,63 +98,29 @@ void InstallService()
 
     if (r == 0)
     {
-        RunSc($"description {AgentConfig.SvcName} \"Agente de monitoramento e suporte remoto RockDesk (C#)\"");
+        RunSc($"description {AgentConfig.SvcName} \"Agente de suporte remoto RockDesk (C#)\"");
         RunSc($"start {AgentConfig.SvcName}");
-        Console.WriteLine($"Serviço instalado e iniciado a partir de:\n  {destExe}");
-        logger.LogInformation("Serviço instalado em {Path}", destExe);
+        Console.WriteLine($"OK — serviço instalado em:\n  {destExe}");
+        logger.LogInformation("Serviço instalado: {P}", destExe);
     }
-    else
-    {
-        Console.WriteLine($"Falha ao instalar serviço (código {r}).");
-    }
+    else Console.WriteLine($"Erro ao instalar serviço (código {r}).");
 }
 
 void RemoveService()
 {
-    Console.WriteLine($"Removendo serviço '{AgentConfig.SvcName}'...");
     RunSc($"stop {AgentConfig.SvcName}");
     Thread.Sleep(2000);
     RunSc($"delete {AgentConfig.SvcName}");
     Console.WriteLine("Serviço removido.");
 }
 
-int RunSc(string arguments)
+int RunSc(string args_)
 {
     var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
     {
-        FileName               = "sc.exe",
-        Arguments              = arguments,
-        RedirectStandardOutput = true,
-        UseShellExecute        = false,
-        CreateNoWindow         = true
+        FileName = "sc.exe", Arguments = args_,
+        RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
     });
     p?.WaitForExit(10_000);
     return p?.ExitCode ?? -1;
-}
-
-void RunSetup()
-{
-    Application.EnableVisualStyles();
-    Application.SetCompatibleTextRenderingDefault(false);
-    Application.Run(new RockDeskAgent.Setup.SetupForm());
-}
-
-void RunTray()
-{
-    Application.EnableVisualStyles();
-    Application.SetCompatibleTextRenderingDefault(false);
-    Application.Run(new RockDeskAgent.Tray.TrayApp());
-}
-
-async Task RunDebugAsync()
-{
-    logger.LogInformation("Modo debug — Ctrl+C para parar.");
-    using var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-
-    var host = Host.CreateDefaultBuilder()
-        .ConfigureServices(s => s.AddHostedService<AgentService>())
-        .Build();
-
-    await host.RunAsync(cts.Token);
 }
