@@ -22,6 +22,10 @@ public static class AgentLogger
 
     public static ILogger<T> Get<T>() =>
         (_factory ?? LoggerFactory.Create(_ => { })).CreateLogger<T>();
+
+    /// <summary>Para classes static que não podem ser type-args de ILogger&lt;T&gt;.</summary>
+    public static ILogger GetNamed(string category) =>
+        (_factory ?? LoggerFactory.Create(_ => { })).CreateLogger(category);
 }
 
 // ── Provedor de log em arquivo ─────────────────────────────────────────────

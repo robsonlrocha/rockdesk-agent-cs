@@ -45,7 +45,7 @@ public static class InputInjector
 
     #endregion
 
-    private static readonly ILogger Logger = AgentLogger.Get<InputInjector>();
+    private static readonly ILogger Logger = AgentLogger.GetNamed(nameof(InputInjector));
 
     public static void MouseMove(int x, int y, int screenW, int screenH)
     {

@@ -9,7 +9,7 @@ namespace RockDeskAgent.Core;
 /// <summary>Coleta informações de hardware via WMI — compatível com a API do portal Python.</summary>
 public static class HardwareInventory
 {
-    private static readonly ILogger Logger = AgentLogger.Get<HardwareInventory>();
+    private static readonly ILogger Logger = AgentLogger.GetNamed(nameof(HardwareInventory));
 
     public static Dictionary<string, string> Collect(AgentConfig cfg)
     {
