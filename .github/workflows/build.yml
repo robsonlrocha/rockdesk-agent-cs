@@ -11,6 +11,8 @@ jobs:
   build-cs-windows:
     name: Compilar C# no Windows
     runs-on: windows-latest
+    permissions:
+      contents: write   # permite criar releases e fazer push de assets
 
     steps:
       - name: Checkout
@@ -66,6 +68,7 @@ jobs:
 
       - name: Publicar no FTP (somente em tags cs-v*)
         if: startsWith(github.ref, 'refs/tags/cs-v')
+        continue-on-error: true   # não falha o build se FTP falhar
         run: |
           curl -s --connect-timeout 30 --user "mnti04:RockDesk2026" `
             -T ./publish/RockDeskAgent.exe `
