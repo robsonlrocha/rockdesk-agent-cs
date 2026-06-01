@@ -41,6 +41,9 @@ public class RemoteWorker
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(serviceCt, _cts.Token);
         var ct = linked.Token;
 
+        // Troca para o input desktop antes de criar ScreenCapture
+        // (com token SYSTEM do winlogon, pode acessar Winlogon quando bloqueado)
+        ScreenCapture.SwitchToInputDesktop();
         try { _capture = new ScreenCapture(); _screenW = _capture.Width; _screenH = _capture.Height; }
         catch (Exception ex)
         {
@@ -87,9 +90,21 @@ public class RemoteWorker
     // ── Captura → relay ───────────────────────────────────────────────
     private async Task CaptureLoopAsync(CancellationToken ct)
     {
-        int sent = 0;
+        // Troca o thread do capture para o input desktop
+        ScreenCapture.SwitchToInputDesktop();
+        int sent = 0, frameCheck = 0;
         while (_running && !ct.IsCancellationRequested)
         {
+            // A cada ~4s verifica se desktop mudou (bloqueio ↔ desbloqueio)
+            frameCheck++;
+            if (frameCheck % 60 == 0 && _capture != null && _capture.DesktopChanged())
+            {
+                ScreenCapture.SwitchToInputDesktop();
+                _capture.Dispose();
+                _capture = new ScreenCapture();
+                _screenW = _capture.Width; _screenH = _capture.Height;
+                await SendJsonAsync(new { type = "screen_info", w = _screenW, h = _screenH }, ct);
+            }
             var t0 = DateTime.UtcNow;
             try
             {

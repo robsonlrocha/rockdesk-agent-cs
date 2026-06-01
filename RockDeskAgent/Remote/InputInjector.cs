@@ -107,40 +107,45 @@ public static class InputInjector
     }
 
     /// <summary>
-    /// Sinaliza Ctrl+Alt+Del:
-    /// 1. Cria arquivo sas.trigger — o SERVIÇO (SCM) monitora e chama SendSAS(TRUE)
-    ///    (subprocess não é SCM service, então SendSAS direto seria ignorado)
-    /// 2. Tenta SendSAS diretamente como fallback (pode funcionar com SasGeneration=1)
+    /// Simula Ctrl+Alt+Del.
+    /// O subprocess roda com token SYSTEM do winlogon (SeTcbPrivilege) →
+    /// SendSAS(TRUE) funciona diretamente a partir do desktop de input ativo.
+    /// Também cria sas.trigger como fallback para o serviço SCM.
     /// </summary>
     public static bool TrySendSAS()
     {
-        var triggerFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "RockDeskAgent", "sas.trigger");
+        // 1. Garante que o thread está no input desktop (Winlogon ou Default)
+        //    antes de chamar SendSAS (necessário para o SAS ir para o lugar certo)
+        var desktop = ScreenCapture.SwitchToInputDesktop();
+        Logger.LogInformation("TrySendSAS no desktop='{D}'", desktop);
 
-        // Método 1: file trigger → serviço SCM chama SendSAS (confiável)
+        // 2. Chama SendSAS(TRUE) diretamente — funciona com token SYSTEM (winlogon)
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(triggerFile)!);
-            File.WriteAllText(triggerFile, "1");
-            Logger.LogInformation("SAS trigger criado → serviço enviará SendSAS.");
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning("SAS trigger falhou: {E}", ex.Message);
-        }
-
-        // Método 2: tentativa direta (funciona se SasGeneration=1 no registro)
-        try
-        {
-            SendSAS(true);
-            Logger.LogInformation("SendSAS(TRUE) direto OK.");
+            SendSAS(true); // TRUE = keyboard-initiated
+            Logger.LogInformation("SendSAS(TRUE) executado com sucesso (desktop='{D}').", desktop);
             return true;
         }
         catch (Exception ex)
         {
-            Logger.LogDebug("SendSAS direto: {E}", ex.Message);
-            return true; // trigger foi criado, serviço vai enviar
+            Logger.LogWarning("SendSAS(TRUE) falhou: {E} — usando trigger file.", ex.Message);
+        }
+
+        // 3. Fallback: arquivo trigger → serviço SCM chama SendSAS
+        try
+        {
+            var triggerFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "RockDeskAgent", "sas.trigger");
+            Directory.CreateDirectory(Path.GetDirectoryName(triggerFile)!);
+            File.WriteAllText(triggerFile, "1");
+            Logger.LogInformation("SAS trigger criado → serviço enviará SendSAS.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("SAS trigger falhou: {E}", ex.Message);
+            return false;
         }
     }
 
