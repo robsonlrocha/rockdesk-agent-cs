@@ -1,0 +1,72 @@
+name: Build RockDesk Agent CS
+
+on:
+  push:
+    branches: [ main ]
+    tags:     [ 'cs-v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-cs-windows:
+    name: Compilar C# no Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restaurar dependências
+        run: dotnet restore RockDeskAgent/RockDeskAgent.csproj
+
+      - name: Compilar e publicar (single-file)
+        run: |
+          dotnet publish RockDeskAgent/RockDeskAgent.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishReadyToRun=true `
+            -p:EnableCompressionInSingleFile=true `
+            --output ./publish
+
+      - name: Info do executável
+        run: |
+          $exe = Get-Item ./publish/RockDeskAgent.exe
+          Write-Host "Tamanho: $([math]::Round($exe.Length/1MB, 1)) MB"
+          Write-Host "Versão: $((Get-Item ./publish/RockDeskAgent.exe).VersionInfo.FileVersion)"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RockDeskAgentCS
+          path: ./publish/RockDeskAgent.exe
+
+      - name: Criar GitHub Release (somente em tags cs-v*)
+        if: startsWith(github.ref, 'refs/tags/cs-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./publish/RockDeskAgent.exe
+          name: "RockDesk Agent CS ${{ github.ref_name }}"
+          body: |
+            ## RockDesk Agent C# — ${{ github.ref_name }}
+
+            Agente C# com suporte nativo a:
+            - ✅ Ctrl+Alt+Del via SendSAS (SCM Service genuíno)
+            - ✅ Captura de tela bloqueada (Windows.Graphics.Capture)
+            - ✅ ~3x menor que o agente Python
+            - ✅ Startup < 0.5s
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar no FTP (somente em tags cs-v*)
+        if: startsWith(github.ref, 'refs/tags/cs-v')
+        run: |
+          curl -s --connect-timeout 30 --user "mnti04:RockDesk2026" `
+            -T ./publish/RockDeskAgent.exe `
+            ftp://ftp.mnti.com.br/downloads/RockDeskAgentCS.exe

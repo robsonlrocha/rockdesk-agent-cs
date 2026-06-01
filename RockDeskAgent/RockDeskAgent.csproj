@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Windows 10 2004+ para Windows.Graphics.Capture API -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>RockDeskAgent</AssemblyName>
+    <RootNamespace>RockDeskAgent</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Publicação como single-file self-contained -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
+    <!-- Metadados -->
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Company>MNTI</Company>
+    <Product>RockDesk Agent</Product>
+    <Description>Agente de monitoramento e suporte remoto RockDesk (C#)</Description>
+    <Copyright>© 2026 MNTI</Copyright>
+
+    <!-- Ícone e manifesto -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows Service hosting -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+
+    <!-- JSON serialization -->
+    <PackageReference Include="System.Text.Json" Version="8.0.0" />
+
+    <!-- WebSocket client para relay -->
+    <PackageReference Include="Websocket.Client" Version="5.1.2" />
+
+    <!-- Compressão de imagem JPEG -->
+    <PackageReference Include="SkiaSharp" Version="2.88.8" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.8" />
+
+    <!-- WMI para inventário de hardware -->
+    <PackageReference Include="Microsoft.Management.Infrastructure" Version="3.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="app.manifest">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
