@@ -41,8 +41,18 @@ public class RemoteWorker
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(serviceCt, _cts.Token);
         var ct = linked.Token;
 
+        // Reage imediatamente quando o desktop muda após SendSAS
+        InputInjector.DesktopChangedAfterSas += newDesk =>
+        {
+            Logger.LogInformation("DesktopChangedAfterSas: '{D}' — recriando captura imediatamente.", newDesk);
+            ScreenCapture.SwitchToInputDesktop();
+            _capture?.Dispose();
+            _capture = new ScreenCapture();
+            _screenW = _capture.Width; _screenH = _capture.Height;
+            _ = SendJsonAsync(new { type = "screen_info", w = _screenW, h = _screenH }, _cts.Token);
+        };
+
         // Troca para o input desktop antes de criar ScreenCapture
-        // (com token SYSTEM do winlogon, pode acessar Winlogon quando bloqueado)
         ScreenCapture.SwitchToInputDesktop();
         try { _capture = new ScreenCapture(); _screenW = _capture.Width; _screenH = _capture.Height; }
         catch (Exception ex)
@@ -95,9 +105,9 @@ public class RemoteWorker
         int sent = 0, frameCheck = 0;
         while (_running && !ct.IsCancellationRequested)
         {
-            // A cada ~4s verifica se desktop mudou (bloqueio ↔ desbloqueio)
+            // A cada ~1s verifica se desktop mudou (bloqueio ↔ desbloqueio)
             frameCheck++;
-            if (frameCheck % 60 == 0 && _capture != null && _capture.DesktopChanged())
+            if (frameCheck % 15 == 0 && _capture != null && _capture.DesktopChanged())
             {
                 ScreenCapture.SwitchToInputDesktop();
                 _capture.Dispose();

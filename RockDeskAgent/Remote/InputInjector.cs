@@ -114,24 +114,43 @@ public static class InputInjector
     /// </summary>
     public static bool TrySendSAS()
     {
-        // 1. Garante que o thread está no input desktop (Winlogon ou Default)
-        //    antes de chamar SendSAS (necessário para o SAS ir para o lugar certo)
-        var desktop = ScreenCapture.SwitchToInputDesktop();
-        Logger.LogInformation("TrySendSAS no desktop='{D}'", desktop);
+        // 1. Garante que o thread está no input desktop antes de chamar SendSAS
+        var desktopBefore = ScreenCapture.SwitchToInputDesktop();
+        Logger.LogInformation("TrySendSAS: desktop antes='{D}'", desktopBefore);
 
-        // 2. Chama SendSAS(TRUE) diretamente — funciona com token SYSTEM (winlogon)
+        // 2. Chama SendSAS(TRUE) — com token SYSTEM do winlogon, SeTcbPrivilege ativo
+        bool sent = false;
         try
         {
-            SendSAS(true); // TRUE = keyboard-initiated
-            Logger.LogInformation("SendSAS(TRUE) executado com sucesso (desktop='{D}').", desktop);
+            SendSAS(true);
+            Logger.LogInformation("SendSAS(TRUE) executado.");
+            sent = true;
+        }
+        catch (Exception ex) { Logger.LogWarning("SendSAS(TRUE): {E}", ex.Message); }
+
+        // 3. Polling rápido por troca de desktop (100ms por 3s)
+        // A tela de segurança do Windows aparece no Winlogon desktop.
+        // Detectamos a mudança imediatamente para o CaptureLoop trocar.
+        if (sent)
+        {
+            Task.Run(() =>
+            {
+                for (int i = 0; i < 30; i++)
+                {
+                    Thread.Sleep(100);
+                    var current = ScreenCapture.GetInputDesktopName();
+                    if (current != desktopBefore && current != "Unknown")
+                    {
+                        Logger.LogInformation("Desktop mudou após SAS: '{B}'→'{C}'", desktopBefore, current);
+                        DesktopChangedAfterSas?.Invoke(current);
+                        break;
+                    }
+                }
+            });
             return true;
         }
-        catch (Exception ex)
-        {
-            Logger.LogWarning("SendSAS(TRUE) falhou: {E} — usando trigger file.", ex.Message);
-        }
 
-        // 3. Fallback: arquivo trigger → serviço SCM chama SendSAS
+        // 4. Fallback: trigger file → serviço SCM chama SendSAS
         try
         {
             var triggerFile = Path.Combine(
@@ -139,15 +158,13 @@ public static class InputInjector
                 "RockDeskAgent", "sas.trigger");
             Directory.CreateDirectory(Path.GetDirectoryName(triggerFile)!);
             File.WriteAllText(triggerFile, "1");
-            Logger.LogInformation("SAS trigger criado → serviço enviará SendSAS.");
             return true;
         }
-        catch (Exception ex)
-        {
-            Logger.LogWarning("SAS trigger falhou: {E}", ex.Message);
-            return false;
-        }
+        catch { return false; }
     }
+
+    /// <summary>Disparado quando o desktop muda após SendSAS (para o RemoteWorker trocar imediatamente).</summary>
+    public static event Action<string>? DesktopChangedAfterSas;
 
     private static void Send(INPUT inp) =>
         SendInput(1, new[] { inp }, Marshal.SizeOf<INPUT>());
